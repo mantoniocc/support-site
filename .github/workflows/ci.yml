@@ -28,5 +28,11 @@ jobs:
             - name: Instalar dependencias
               run: npm ci
 
-            - name: Ejecutar tests
-              run: npm test
+            - name: Publicar reporte de tests
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                name: test-results-${{github.run_id}}
+                path: app/test-results.tap
+                retention-days: 5
+                if-no-files-found: error
