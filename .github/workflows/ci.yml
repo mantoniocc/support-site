@@ -84,14 +84,17 @@ jobs:
 
         - name: Calcular tags
           id: meta
+          env:
+            DEPLOY_SHA: ${{github.event.pull_request.head.sha || github.sha}}
           run: |
             IMAGE="${REGISTRY,,}/${IMAGE_NAME,,}"
             {
                 echo "image=${IMAGE}"
-                echo "short_sha=${GITHUB_SHA::7}"
+                echo "sha=${DEPLOY_SHA}"
+                echo "short_sha=${DEPLOY_SHA::7}"
                 echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
                 echo "tags<<TAGS_EOF"
-                echo "${IMAGE}:${GITHUB_SHA}"
+                echo "${IMAGE}:${DEPLOY_SHA}"
                 if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
                 echo "${IMAGE}:latest"
                 fi
@@ -107,7 +110,7 @@ jobs:
             push: ${{ steps.gate.outputs.push == 'true' }}
             tags: ${{ steps.meta.outputs.tags }}
             build-args: |
-                COMMIT_SHA=${{ github.sha }}
+                COMMIT_SHA=${{ steps.meta.outputs.sha }}
                 BUILD_TIME=${{ steps.meta.outputs.build_time }}
             labels: |
                 org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
