@@ -19,6 +19,14 @@ jobs:
             contains(github.event.pull_request.labels.*.name, 'stage') && 
             github.event.pull_request.head.repo.full_name == github.repository
         runs-on: ubuntu-latest
+        environment:
+            name: staging
+            url: ${{steps.deploy.outputs.app_url}}
+
+        permissions: 
+            id-token: write
+            contents: read
+            pull-requests: write
         steps:
             - uses: actions/checkout@v5
               with:
@@ -49,3 +57,24 @@ jobs:
                 done
                 echo "::error::La imagen no aparecio en 5 minutos. ¿Termino el workflow de CI?"
                 exit 1
+
+            - name: Login en Azure
+              uses: azure/login@v2
+              with:
+                client-id: ${{ secrets.AZURE_CLIENT_ID }}
+                tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+                subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+            - name: Desplegar con Bicep
+              id: deploy
+              run: |
+                set -euo pipefail
+                APP_URL=$(az deployment group create \
+                    --resource-group "${{vars.AZURE_RESOURCE_GROUP}}" \
+                    --name "pr-${{github.event.pull_request.number}}-${{steps.img.outputs.short_sha}}" \
+                    --parameters infra/staging.bicepparam \
+                    --parameters containerImage="${{steps.img.outputs.image}}" \
+                    --revisionSuffix="${{steps.img.outputs.short_sha}}" \
+                    --query properties.outputs.appUrl.value -o tsv)
+                echo "app_url=${APP_URL}" >> "$GITHUB_OUTPUTS"
+                echo "Desplegando en ${APP_URL}" 
