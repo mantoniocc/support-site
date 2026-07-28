@@ -2,12 +2,6 @@ name: Probar login OIDC
 
 on:
   workflow_dispatch:
-    inputs:
-      debug_login_enabled:
-        description: Activa el debug de login de Azure
-        type: boolean
-        default: false
-        required: false
 
 permissions:
   contents: read
@@ -21,42 +15,6 @@ jobs:
       id-token: write             # permite pedir el JWT
       contents: read
     steps:
-      - name: Inspeccionar claims del token OIDC
-        if: ${{ inputs.debug_login_enabled }}
-        shell: bash
-        env:
-          AUDIENCE: api://AzureADTokenExchange
-        run: |
-          set -euo pipefail
-
-          RESPONSE=$(curl \
-            --fail-with-body \
-            --silent \
-            --show-error \
-            --header "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${AUDIENCE}")
-
-          TOKEN=$(jq -r '.value' <<< "$RESPONSE")
-
-          if [[ -z "$TOKEN" || "$TOKEN" == "null" ]]; then
-            echo "::error::GitHub no devolvió un token OIDC"
-            exit 1
-          fi
-
-          PAYLOAD=$(cut -d '.' -f 2 <<< "$TOKEN")
-
-          # JWT usa Base64 URL-safe y puede venir sin padding.
-          PAYLOAD="${PAYLOAD//-/+}"
-          PAYLOAD="${PAYLOAD//_//}"
-
-          case $((${#PAYLOAD} % 4)) in
-            2) PAYLOAD="${PAYLOAD}==" ;;
-            3) PAYLOAD="${PAYLOAD}=" ;;
-          esac
-
-          echo "Claims del token OIDC:"
-          printf '%s' "$PAYLOAD" | base64 --decode | jq
-
       - name: Login en Azure
         uses: azure/login@v2
         with:
