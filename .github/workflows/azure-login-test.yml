@@ -2,6 +2,12 @@ name: Probar login OIDC
 
 on:
   workflow_dispatch:
+    inputs:
+      debug_login_enabled:
+        description: Activa el debug de login de Azure
+        type: boolean
+        default: false
+        required: false
 
 permissions:
   contents: read
@@ -15,6 +21,12 @@ jobs:
       id-token: write             # permite pedir el JWT
       contents: read
     steps:
+      - name: Inspeccionar claims del token
+        uses: github/actions-oidc-debugger@main
+        if: ${{inputs.debug_login_enabled}}
+        with:
+            audience: api://AzureADTokenExchange
+
       - name: Login en Azure
         uses: azure/login@v2
         with:
