@@ -20,11 +20,32 @@ jobs:
             github.event.pull_request.head.repo.full_name == github.repository
         runs-on: ubuntu-latest
         steps:
-            - name: Que desplegaria
+            - uses: actions/checkout@v5
+              with:
+                ref: ${{github.event.pull_request.head.sha}}
+            
+            - name: Resolver la imagen
+              id: img
               run: |
-                echo "PR            : #${{github.event.pull_request.number}}"
-                echo "Rama          : ${{github.event.pull_request.head.ref}}"
-                echo "head.sha      : ${{github.event.pull_request.head.sha}}"
-                echo "github.sha    : (merge commit): ${{github.sha}}"
-                echo "Evento        : ${{github.event.action}}"
-                echo "Labels        : ${{join(github.event.pull_request.labels.*.name, ', ')}}"
+                OWNER_LC="${GITHUB_REPOSITORY_OWNER,,}"
+                SHA="${{github.event.pull_request.head.sha}}"
+                {
+                    echo "sha=${SHA}"
+                    echo "short_sha=${SHA::7}"
+                    echo "image=ghcr.io/${OWNER_LC}/support-site:${SHA}"
+                } >> "$GITHUB_OUTPUT"
+                
+            - name: Esperar a que el CI publique la imagen
+              run: |
+                IMAGE="${{steps.img.outputs.image}}"
+                echo "Buscando $IMAGE"
+                for i in $(seq 1 30); do
+                    if docker buildx imagetools inspect $IMAGE >/dev/null 2>&1; then
+                        echo "Disponible tras $((i*10))s"
+                        exit 0
+                    fi
+                    echo " intento $i/30..."
+                    sleep 10
+                done
+                echo "::error::La imagen no aparecio en 5 minutos. ¿Termino el workflow de CI?"
+                exit 1
