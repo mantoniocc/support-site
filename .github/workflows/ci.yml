@@ -55,6 +55,9 @@ jobs:
         permissions:
             contents: read
             packages: write
+            id-token: write
+            attestations: write
+
         steps:
         - uses: actions/checkout@v5
 
@@ -112,6 +115,14 @@ jobs:
             cache-from: type=gha
             cache-to: type=gha,mode=max
             provenance: false
+
+        - name: Generar attestation de procedencia
+          if: steps.gate.outputs.push == 'true'
+          uses: actions/attest-build-provenance@v2
+          with:
+            subject-name: ${{steps.meta.outputs.image}}
+            subject-digest: ${{steps.build.outputs.digest}}
+            push-to-registry: true
 
         - name: Resumen
           run: |
