@@ -10,7 +10,7 @@ jobs:
   probar:
     name: Verificar acceso a Azure
     runs-on: ubuntu-latest
-    #environment: staging          # define el sub del token
+    environment: staging          # define el sub del token
     permissions:
       id-token: write             # permite pedir el JWT
       contents: read
