@@ -10,7 +10,7 @@ param appEnvironment string
 param location string = resourceGroup().location
 
 @description('Placeholder de Microsoft para el primer aprovisionamiento, cuando aun no apuntamos a nuestra imagen.')
-param containerImage string
+param containerImage string = ''
 
 param revisionSuffix string = ''
 param minReplicas int = 0
