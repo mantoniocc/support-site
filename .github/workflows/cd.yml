@@ -70,11 +70,11 @@ jobs:
               run: |
                 set -euo pipefail
                 APP_URL=$(az deployment group create \
-                    --resource-group "${{vars.AZURE_RESOURCE_GROUP}}" \
-                    --name "pr-${{github.event.pull_request.number}}-${{steps.img.outputs.short_sha}}" \
+                    --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+                    --name "pr-${{ github.event.pull_request.number }}-${{ steps.img.outputs.short_sha }}" \
                     --parameters infra/staging.bicepparam \
-                    --parameters containerImage="${{steps.img.outputs.image}}" \
-                    --parameters revisionSuffix="${{steps.img.outputs.short_sha}}" \
+                    --parameters containerImage="${{ steps.img.outputs.image }}" \
+                                revisionSuffix="${{ steps.img.outputs.short_sha }}" \
                     --query properties.outputs.appUrl.value -o tsv)
-                echo "app_url=${APP_URL}" >> "$GITHUB_OUTPUTS"
-                echo "Desplegando en ${APP_URL}" 
+                echo "app_url=${APP_URL}" >> "$GITHUB_OUTPUT"
+                echo "Desplegado en ${APP_URL}"
