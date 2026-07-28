@@ -1,0 +1,30 @@
+name: CD
+
+on:
+    pull_request: 
+        types: [labeled, synchronize]
+
+permissions: 
+    contents: read
+
+# No cancelamos despliegues en vuelo: dejar Azure a medias es peor que esperar.
+concurrency: 
+    group: cd-staging-${{github.event.pull_request.number}}
+    cancel-in-progress: false
+
+jobs:
+    deploy-to-staging:
+        name: Deplesgar a staging
+        if: >-
+            contains(github.event.pull_request.labels.*.name, 'stage') && 
+            github.event.pull_request.head.repo.full_name == github.repository
+        runs-on: ubuntu-latest
+        steps:
+            - name: Que desplegaria
+              run: |
+                echo "PR            : #${{github.event.pull_request.number}}"
+                echo "Rama          : ${{github.event.pull_request.head.ref}}"
+                echo "head.sha      : ${{github.event.pull_request.head.sha}}"
+                echo "github.sha    : (merge commit): ${{github.sha}}"
+                echo "Evento        : ${{github.event.action}}"
+                echo "Labels        : ${{join(github.event.pull_request.labels.*.name, ', ')}}"
