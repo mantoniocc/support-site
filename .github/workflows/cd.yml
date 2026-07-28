@@ -74,7 +74,7 @@ jobs:
                     --name "pr-${{github.event.pull_request.number}}-${{steps.img.outputs.short_sha}}" \
                     --parameters infra/staging.bicepparam \
                     --parameters containerImage="${{steps.img.outputs.image}}" \
-                    --revisionSuffix="${{steps.img.outputs.short_sha}}" \
+                    --parameters revisionSuffix="${{steps.img.outputs.short_sha}}" \
                     --query properties.outputs.appUrl.value -o tsv)
                 echo "app_url=${APP_URL}" >> "$GITHUB_OUTPUTS"
                 echo "Desplegando en ${APP_URL}" 
