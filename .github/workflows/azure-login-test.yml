@@ -1,39 +1,39 @@
 name: Probar login OIDC
 
 on:
-    workflow_dispatch: 
+  workflow_dispatch:
 
-permissions: 
-    contents: read
+permissions:
+  contents: read
 
 jobs:
-    probar:
-        name: Verificar acceso a Azure
-        runs-on: ubuntu-latest
-        environment: staging
-        permissions: 
-            id-token: write
-            contents: read
-        steps:
-            - name: Login en Azure
-              uses: azure/login@v2
-              with:
-                client-id: ${{secrets.AZURE_CLIENT_ID}}
-                tenant-id: ${{secrets.AZURE_TENANT_ID}}
-                subscription-id: ${{secrets.AZURE_SUBSCRIPTION_ID}}
-            
-            - name: Quien soy
-              run: az account show --query "{subscription:name, usuario:user.name}" -o table
-            
-            - name: Que alcanzo a ver
-              run: |
-                echo "Resource groups visibles:"
-                az group list --query "[].name -o tsv"
+  probar:
+    name: Verificar acceso a Azure
+    runs-on: ubuntu-latest
+    environment: staging          # define el sub del token
+    permissions:
+      id-token: write             # permite pedir el JWT
+      contents: read
+    steps:
+      - name: Login en Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-            - name: Leer la Container App
-              run: |
-                az containerapp show \
-                    -n ${{ vars.CONTAINER_APP_NAME }} \
-                    -g ${{ vars.AZURE_RESOURCE_GROUP }} \
-                    --query "{nombre:name, revision:properties.latestRevisionName, url:properties.configuration.ingress.fqdn}" \
-                    -o table
+      - name: Quien soy
+        run: az account show --query "{suscripcion:name, usuario:user.name}" -o table
+
+      - name: Que alcanzo a ver
+        run: |
+          echo "Resource groups visibles:"
+          az group list --query "[].name" -o tsv
+
+      - name: Leer la Container App
+        run: |
+          az containerapp show \
+            -n ${{ vars.CONTAINER_APP_NAME }} \
+            -g ${{ vars.AZURE_RESOURCE_GROUP }} \
+            --query "{nombre:name, revision:properties.latestRevisionName, url:properties.configuration.ingress.fqdn}" \
+            -o table
