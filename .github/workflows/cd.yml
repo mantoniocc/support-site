@@ -1,0 +1,150 @@
+name: CD
+
+on:
+    pull_request: 
+        types: [labeled, synchronize]
+
+permissions: 
+    contents: read
+
+# No cancelamos despliegues en vuelo: dejar Azure a medias es peor que esperar.
+concurrency: 
+    group: cd-staging-${{github.event.pull_request.number}}
+    cancel-in-progress: false
+
+jobs:
+    deploy-to-staging:
+        name: Deplesgar a staging
+        if: >-
+            contains(github.event.pull_request.labels.*.name, 'stage') && 
+            github.event.pull_request.head.repo.full_name == github.repository
+        runs-on: ubuntu-latest
+        environment:
+            name: staging
+            url: ${{steps.deploy.outputs.app_url}}
+
+        permissions: 
+            id-token: write
+            contents: read
+            pull-requests: write
+        steps:
+            - uses: actions/checkout@v5
+              with:
+                ref: ${{github.event.pull_request.head.sha}}
+            
+            - name: Resolver la imagen
+              id: img
+              run: |
+                OWNER_LC="${GITHUB_REPOSITORY_OWNER,,}"
+                SHA="${{github.event.pull_request.head.sha}}"
+                {
+                    echo "sha=${SHA}"
+                    echo "short_sha=${SHA::7}"
+                    echo "image=ghcr.io/${OWNER_LC}/support-site:${SHA}"
+                } >> "$GITHUB_OUTPUT"
+                
+            - name: Esperar a que el CI publique la imagen
+              run: |
+                IMAGE="${{steps.img.outputs.image}}"
+                echo "Buscando $IMAGE"
+                for i in $(seq 1 30); do
+                    if docker buildx imagetools inspect $IMAGE >/dev/null 2>&1; then
+                        echo "Disponible tras $((i*10))s"
+                        exit 0
+                    fi
+                    echo " intento $i/30..."
+                    sleep 10
+                done
+                echo "::error::La imagen no aparecio en 5 minutos. ¿Termino el workflow de CI?"
+                exit 1
+
+            - name: Login en Azure
+              uses: azure/login@v2
+              with:
+                client-id: ${{ secrets.AZURE_CLIENT_ID }}
+                tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+                subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+            - name: Desplegar con Bicep
+              id: deploy
+              run: |
+                set -euo pipefail
+                APP_URL=$(az deployment group create \
+                    --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+                    --name "pr-${{ github.event.pull_request.number }}-${{ steps.img.outputs.short_sha }}" \
+                    --parameters infra/staging.bicepparam \
+                    --parameters containerImage="${{ steps.img.outputs.image }}" \
+                                revisionSuffix="${{ steps.img.outputs.short_sha }}" \
+                    --query properties.outputs.appUrl.value -o tsv)
+                echo "app_url=${APP_URL}" >> "$GITHUB_OUTPUT"
+                echo "Desplegado en ${APP_URL}"
+
+            - name: Smoke test
+              id: smoke
+              run: |
+                set -euo pipefail
+                URL="${{steps.deploy.outputs.app_url}}"
+                ESPERADO="${{steps.img.outputs.sha}}"
+
+                # La primera peticion despierta la app desde cero replicas.
+                for i in $(seq 1 20); do
+                    if BODY=$(curl -sf --max-time 10 "${URL}/api/version"); then
+                        break
+                    fi
+                    echo "  esperando arranque en frio ($i/20)..."
+                    sleep 5
+                done
+
+                if [[ -z "${BODY:-}" ]]; then
+                    echo "::error::La app no repondio en 100 segundos"
+                    exit 1
+                fi
+
+                echo "$BODY" | jq .
+
+                DESPLEGADO=$(jq -r .commitSha <<< "$BODY")
+                ENTORNO=$(jq -r .appEnv <<< "$BODY")
+
+                if [[ "$DESPLEGADO" != "$ESPERADO" ]]; then
+                    echo "::error::SHA desplegado ($DESPLEGADO) != esperado ($ESPERADO)"
+                    exit 1
+                fi
+
+                if [[ "$ENTORNO" != "staging" ]]; then
+                    echo "::error::La app se indentifica como '$ENTORNO", se esperaba 'staging'
+                    exit 1
+                fi
+
+                echo "Verificado: ${DESPLEGADO::7} corriendo en $ENTORNO"
+
+            - name: Comentar en el PR
+              if: always()
+              env:
+                GH_TOKEN: ${{github.token}}
+                PR: ${{github.event.pull_request.number}}
+              run: |
+                if [[ "${{job.status}}" == "success" ]]; then
+                    CUERPO=$(cat <<EOF
+                ### Desplegado en staging
+
+                | | |
+                |---|---|
+                | URL | ${{ steps.deploy.outputs.app_url }} |
+                | Commit | \`${{ steps.img.outputs.short_sha }}\` |
+                | Imagen | \`${{ steps.img.outputs.image }}\` |
+                | Run | [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |
+
+                Smoke test verificado contra \`/api/version\`.
+                EOF
+                )
+                else
+                    CUERPO=$(cat <<EOF
+                ### Falló el despliegue a staging
+
+                Commit \`${{ steps.img.outputs.short_sha }}\` — [ver logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+                EOF
+                )
+                fi
+
+                gh pr comment "$PR" --edit-last --body "$CUERPO" 2>/dev/null \
+                    || gh pr comment "$PR" --body "$CUERPO"
