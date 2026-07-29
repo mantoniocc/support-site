@@ -1,8 +1,6 @@
 name: CI
 
 on:
-    push:
-        branches: [main]
     pull_request:
     workflow_dispatch:
 
@@ -95,9 +93,6 @@ jobs:
                 echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
                 echo "tags<<TAGS_EOF"
                 echo "${IMAGE}:${DEPLOY_SHA}"
-                if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
-                echo "${IMAGE}:latest"
-                fi
                 echo "TAGS_EOF"
             } >> "$GITHUB_OUTPUT"
 

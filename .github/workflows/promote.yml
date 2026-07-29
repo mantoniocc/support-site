@@ -1,0 +1,179 @@
+name: Promote to production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: 'SHA del artefacto a promocionar (deja vacío para resolverlo del PR)'
+        required: false
+
+permissions:
+  contents: read
+
+# Un despliegue a producción a la vez. Los siguientes esperan, no se cancelan.
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Resolver artefacto
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      source_sha: ${{ steps.src.outputs.source_sha }}
+      source_short: ${{ steps.src.outputs.source_short }}
+      image: ${{ steps.dig.outputs.image }}
+      digest: ${{ steps.dig.outputs.digest }}
+      image_ref: ${{ steps.dig.outputs.image_ref }}
+    steps:
+      - name: Encontrar el PR de origen
+        id: src
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORZADO: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${FORZADO:-}" ]]; then
+            SRC="$FORZADO"
+            echo "Origen forzado manualmente: $SRC"
+          else
+            SRC=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" \
+                    --jq '.[0].head.sha // empty')
+            if [[ -z "$SRC" ]]; then
+              echo "::error::Sin PR asociado a ${{ github.sha }}. ¿Fue un push directo a main?"
+              exit 1
+            fi
+            echo "main ${{ github.sha }} <- PR head $SRC"
+          fi
+          echo "source_sha=$SRC" >> "$GITHUB_OUTPUT"
+          echo "source_short=${SRC:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolver el digest
+        id: dig
+        run: |
+          set -euo pipefail
+          OWNER_LC="${GITHUB_REPOSITORY_OWNER,,}"
+          IMAGE="ghcr.io/${OWNER_LC}/support-site"
+          SRC="${{ steps.src.outputs.source_sha }}"
+
+          if ! DIGEST=$(docker buildx imagetools inspect "${IMAGE}:${SRC}" \
+                          --format '{{json .Manifest}}' 2>/dev/null | jq -r .digest); then
+            echo "::error::No existe ${IMAGE}:${SRC}. ¿Corrió el CI en ese PR?"
+            exit 1
+          fi
+
+          echo "image=${IMAGE}"                 >> "$GITHUB_OUTPUT"
+          echo "digest=${DIGEST}"               >> "$GITHUB_OUTPUT"
+          echo "image_ref=${IMAGE}@${DIGEST}"   >> "$GITHUB_OUTPUT"
+          echo "Artefacto: ${IMAGE}@${DIGEST}"
+
+  promote:
+    name: Promocionar tag
+    needs: resolve
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Reetiquetar sin reconstruir
+        run: |
+          set -euo pipefail
+          IMAGE="${{ needs.resolve.outputs.image }}"
+          REF="${{ needs.resolve.outputs.image_ref }}"
+          MAIN_SHORT="${GITHUB_SHA:0:7}"
+
+          docker buildx imagetools create \
+            --tag "${IMAGE}:main-${MAIN_SHORT}" \
+            --tag "${IMAGE}:latest" \
+            "${REF}"
+
+          NUEVO=$(docker buildx imagetools inspect "${IMAGE}:main-${MAIN_SHORT}" \
+                    --format '{{json .Manifest}}' | jq -r .digest)
+          ESPERADO="${{ needs.resolve.outputs.digest }}"
+
+          if [[ "$NUEVO" != "$ESPERADO" ]]; then
+            echo "::error::El digest cambió al reetiquetar. Eso no debería pasar nunca."
+            exit 1
+          fi
+          echo "Mismo digest tras reetiquetar: $NUEVO"
+
+  deploy-production:
+    name: Desplegar a producción
+    needs: [resolve, promote]
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.app_url }}
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Desplegar por digest
+        id: deploy
+        run: |
+          set -euo pipefail
+          APP_URL=$(az deployment group create \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --name "prod-${{ needs.resolve.outputs.source_short }}" \
+            --parameters infra/production.bicepparam \
+            --parameters containerImage="${{ needs.resolve.outputs.image_ref }}" \
+                         revisionSuffix="${{ needs.resolve.outputs.source_short }}" \
+            --query properties.outputs.appUrl.value -o tsv)
+          echo "app_url=${APP_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          URL="${{ steps.deploy.outputs.app_url }}"
+          ESPERADO="${{ needs.resolve.outputs.source_sha }}"
+
+          for i in $(seq 1 30); do
+            if BODY=$(curl -sf --max-time 10 "${URL}/api/version"); then break; fi
+            echo "  esperando arranque en frío ($i/30)..."
+            sleep 5
+          done
+          [[ -n "${BODY:-}" ]] || { echo "::error::Sin respuesta en 150s"; exit 1; }
+
+          jq . <<< "$BODY"
+          DESPLEGADO=$(jq -r .commitSha <<< "$BODY")
+          ENTORNO=$(jq -r .appEnv <<< "$BODY")
+
+          [[ "$DESPLEGADO" == "$ESPERADO" ]] || {
+            echo "::error::SHA desplegado ($DESPLEGADO) != artefacto promocionado ($ESPERADO)"; exit 1; }
+          [[ "$ENTORNO" == "production" ]] || {
+            echo "::error::La app dice '$ENTORNO', se esperaba 'production'"; exit 1; }
+
+          echo "Verificado: ${DESPLEGADO:0:7} en $ENTORNO"
+
+      - name: Registro de trazabilidad
+        if: always()
+        run: |
+          {
+            echo "### Promoción a producción"
+            echo
+            echo "| campo | valor |"
+            echo "|---|---|"
+            echo "| commit de main | \`${GITHUB_SHA:0:7}\` |"
+            echo "| artefacto de origen | \`${{ needs.resolve.outputs.source_short }}\` |"
+            echo "| digest | \`${{ needs.resolve.outputs.digest }}\` |"
+            echo "| URL | ${{ steps.deploy.outputs.app_url }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
