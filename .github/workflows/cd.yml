@@ -116,3 +116,35 @@ jobs:
                 fi
 
                 echo "Verificado: ${DESPLEGADO::7} corriendo en $ENTORNO"
+
+            - name: Comentar en el PR
+              if: always()
+              env:
+                GH_TOKEN: ${{github.token}}
+                PR: ${{github.event.pull_request.number}}
+              run: |
+                if [[ "${{job.status}}" == "success" ]]; then
+                    CUERPO=$(cat <<EOF
+                ### Desplegado en staging
+
+                | | |
+                |---|---|
+                | URL | ${{ steps.deploy.outputs.app_url }} |
+                | Commit | \`${{ steps.img.outputs.short_sha }}\` |
+                | Imagen | \`${{ steps.img.outputs.image }}\` |
+                | Run | [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |
+
+                Smoke test verificado contra \`/api/version\`.
+                EOF
+                )
+                else
+                    CUERPO=$(cat <<EOF
+                ### Falló el despliegue a staging
+
+                Commit \`${{ steps.img.outputs.short_sha }}\` — [ver logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+                EOF
+                )
+                fi
+
+                gh pr comment "$PR" --edit-last --body "$CUERPO" 2>/dev/null \
+                    || gh pr comment "$PR" --body "$CUERPO"
