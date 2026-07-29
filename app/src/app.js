@@ -127,7 +127,7 @@ function renderPage(info) {
   <main>
     <div class="panel">
       <div class="banner">
-        <p class="eyebrow">Sitio de soporte &middot; entorno desplegado</p>
+        <p class="eyebrow">Sitio de soporte &middot; entorno desplegado &middot; v2</p>
         <h1 class="env">${theme.label}</h1>
       </div>
       <dl>
