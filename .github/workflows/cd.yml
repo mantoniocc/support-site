@@ -78,3 +78,36 @@ jobs:
                     --query properties.outputs.appUrl.value -o tsv)
                 echo "app_url=${APP_URL}" >> "$GITHUB_OUTPUT"
                 echo "Desplegado en ${APP_URL}"
+
+            - name: Smoke test
+              id: smoke
+              run: |
+                set -euo pipefail
+                URL="${{steps.deploy.outputs.app_url}}"
+                ESPERADO="${{steps.img.outputs.sha}}"
+
+                # La primera peticion despierta la app desde cero replicas.
+                for i in $(seq 1 20); do
+                    if BODY=$(curl -sf --max-time 10 "${URL}/api/version"); then
+                        break
+                    fi
+                    echo "  esperando arranque en frio ($i/20)..."
+                    sleep 5
+                done
+
+                if [[ -z "${BODY:-}" ]]; then
+                    echo "::error::La app no repondio en 100 segundos"
+                    exit 1
+                fi
+
+                echo "$BODY" | jq .
+
+                DESPLEGADO=$(jq -r .commitSha <<< "$BODY")
+                ENTORNO=$(jq -r .appEnv <<< "$BODY")
+
+                if [[ "$ENTORNO" != "staging" ]]; then
+                    echo "::error::La app se indentifica como '$ENTORNO", se esperaba 'staging'
+                    exit 1
+                fi
+
+                echo "Verificado: ${DESPLEGADO::7} corriendo en $ENTORNO"
