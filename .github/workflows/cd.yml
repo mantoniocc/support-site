@@ -105,6 +105,11 @@ jobs:
                 DESPLEGADO=$(jq -r .commitSha <<< "$BODY")
                 ENTORNO=$(jq -r .appEnv <<< "$BODY")
 
+                if [[ "$DESPLEGADO" != "$ESPERADO" ]]; then
+                    echo "::error::SHA desplegado ($DESPLEGADO) != esperado ($ESPERADO)"
+                    exit 1
+                fi
+
                 if [[ "$ENTORNO" != "staging" ]]; then
                     echo "::error::La app se indentifica como '$ENTORNO", se esperaba 'staging'
                     exit 1
