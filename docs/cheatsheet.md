@@ -22,6 +22,8 @@ Organizada por tarea, no por orden cronológico, para que sirva de consulta ráp
 13. [Limpieza](#13-limpieza)
 14. [Recetas de diagnóstico](#14-recetas-de-diagnóstico)
 15. [Glosario de identificadores](#15-glosario-de-identificadores)
+16. [Digests y promoción de artefactos](#16-digests-y-promoción-de-artefactos)
+17. [Trampas de shell](#17-trampas-de-shell)
 
 ---
 
@@ -713,3 +715,130 @@ distintos con IDs distintos, y hacen falta los dos.
 Ninguno de los cuatro primeros es un secreto por sí solo: sin la credencial federada
 —que exige una firma de GitHub sobre un subject exacto— no autorizan nada. Se guardan
 como secrets por higiene, no por necesidad criptográfica.
+
+---
+
+## 16. Digests y promoción de artefactos
+
+### Tag vs digest
+
+| | Tag | Digest |
+|---|---|---|
+| Ejemplo | `support-site:latest` | `support-site@sha256:f9f184…` |
+| Naturaleza | puntero **mutable** | hash del contenido, **inmutable** |
+| Garantía | ninguna: puede reasignarse | mismo digest = mismo binario, siempre |
+| Uso | legibilidad humana | despliegues, firmas, auditoría |
+
+**Regla del laboratorio:** staging puede desplegar por tag; **producción siempre por digest.**
+
+### Leer digests
+
+```bash
+crane digest $IMAGE:$TAG                     # lo más corto
+docker buildx imagetools inspect "${IMAGE}:${TAG}" --format '{{json .Manifest}}' | jq -r .digest
+crane manifest $IMAGE:$TAG | jq              # manifiesto crudo
+```
+
+### Reetiquetar preservando el digest
+
+```bash
+crane auth login ghcr.io -u $OWNER --password-stdin <<< "$GITHUB_TOKEN"
+crane tag $IMAGE@$DIGEST nuevo-tag           # publica los mismos bytes bajo otro nombre
+crane copy $IMAGE@$DIGEST $IMAGE:nuevo-tag   # equivalente, con chequeo extra de capas
+```
+
+Instalar crane en un runner sin depender de una action de terceros:
+
+```bash
+CRANE_VERSION=v0.20.6
+curl -sSL "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" \
+  | sudo tar -xz -C /usr/local/bin crane
+```
+
+### El error que costó una tarde
+
+**`docker buildx imagetools create` NO es un comando para etiquetar.** Construye *manifest
+lists* (índices OCI que agrupan variantes por plataforma). Aunque le pases un solo origen,
+crea un índice nuevo que envuelve tu manifiesto — y ese índice es contenido distinto, con
+digest distinto.
+
+Síntoma en el log:
+
+```
+copying sha256:f9f184… from …@sha256:f9f184…
+pushing sha256:304698a2… to …:latest        <-- digest distinto
+```
+
+Consecuencias, en orden de gravedad:
+
+1. `gh attestation verify` **falla** sobre el tag nuevo: la firma se emitió sobre el digest
+   original, y el índice envolvente no tiene ninguna.
+2. La cadena de procedencia se rompe en silencio — el `docker pull` sigue trayendo la
+   imagen correcta, así que nadie lo nota hasta que algo depende del digest.
+3. Cualquier auditoría "¿esto en producción es lo que aprobamos?" pierde su prueba.
+
+Regla: **`imagetools create` construye índices, `crane tag` etiqueta.**
+
+### Verificar que una promoción fue real
+
+```bash
+crane digest $IMAGE:$PR_SHA      # artefacto probado en staging
+crane digest $IMAGE:latest       # artefacto promocionado
+# deben ser idénticos
+
+gh attestation verify oci://$IMAGE:latest --repo $REPO_NWO
+```
+
+Si la attestation verifica sobre el tag de producción, tienes prueba criptográfica de que
+no hubo reconstrucción entre staging y producción. Si falla, algo reconstruyó o reenvolvió
+el artefacto por el camino.
+
+### Resolver el artefacto de origen tras un squash merge
+
+```bash
+gh api repos/$REPO_NWO/commits/$MAIN_SHA/pulls --jq '.[0].head.sha'
+```
+
+Devuelve el head SHA del PR que originó ese commit de `main`, incluso cuando el squash
+borró la rama. Es el eslabón entre el commit de `main` y la imagen construida en el PR.
+
+> La app en producción reportará el commit del PR, no el de `main`. Es correcto: el
+> artefacto declara honestamente de qué código se construyó.
+
+---
+
+## 17. Trampas de shell
+
+### zsh se come `:letra` después de una variable
+
+En zsh, `:` tras una expansión de parámetro introduce un **modificador de historia**.
+Los modificadores son `s h t r e u l a q x g`.
+
+```bash
+export IMAGE=ghcr.io/mantoniocc/support-site
+
+echo $IMAGE:latest      # -> ghcr.io/mantoniocc/support-siteatest   (:l = minúsculas)
+echo $IMAGE:staging     # -> se rompe también (:s = sustituir)
+echo $IMAGE:$SHA        # -> funciona: ':$' no es un modificador
+```
+
+El error resultante es confuso porque el registry responde 403 sobre un repositorio que no
+existe, no un "tag no encontrado".
+
+**Siempre usa llaves y comillas:**
+
+```bash
+echo "${IMAGE}:latest"
+```
+
+bash no tiene este comportamiento, por eso los workflows en GitHub Actions (que usan bash)
+funcionan sin llaves. El problema aparece solo en tu terminal local.
+
+### Otros hábitos que evitan sustos
+
+```bash
+set -euo pipefail        # al inicio de todo script: falla temprano y ruidosamente
+"${VAR}"                 # siempre entre comillas: protege espacios y valores vacíos
+${VAR:-valor}            # valor por defecto si no está definida
+${VAR:?mensaje}          # aborta con mensaje si no está definida
+```
