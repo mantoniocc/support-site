@@ -99,7 +99,9 @@ Las imágenes **solo nacen en pull requests**. `main` no construye: promociona.
 │   ├── staging.bicepparam
 │   ├── production.bicepparam
 │   └── teardown.bicep        plantilla vacía para modo Complete
-├── docs/cheatsheet.md        referencia de comandos az y gh
+├── docs/
+│   ├── cheatsheet.md         referencia de comandos az y gh
+│   └── adr/                  decisiones de arquitectura y su justificación
 └── .github/workflows/        ver tabla arriba
 ```
 
@@ -228,6 +230,7 @@ repositorio **público**.
    `.bicepparam` de cada entorno.
 
 Los comandos exactos están en [`docs/cheatsheet.md`](docs/cheatsheet.md).
+El porqué de cada decisión, en [`docs/adr/`](docs/adr/README.md).
 
 ### Desarrollo local
 
